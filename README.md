@@ -1,1 +1,0 @@
-# Projekt_3_ElectionsScraper
