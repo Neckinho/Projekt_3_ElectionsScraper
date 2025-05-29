@@ -10,6 +10,10 @@ import requests
 from bs4 import BeautifulSoup
 import pandas as pd
 
+# Výchozí URL pro OKRES JESENÍK
+URL_3 = 'https://www.volby.cz/pls/ps2017nss/ps32?xjazyk=CZ&xkraj=12&xnumnuts=7101'
+DEFAULT_OUTPUT = 'vysledky.csv'
+
 
 def get_soup(url):
     """Vrátí BeautifulSoup objekt ze zadané URL."""
@@ -28,27 +32,24 @@ def get_obec_links(main_url):
 
 def get_obec_data(url):
     """Získá a vrátí volební data pro jednu obec jako slovník."""
+    # Pro úplné zobrazení stran přidáme parametr xf=1 pokud je dostupný
     soup = get_soup(url)
+    if soup.find('a', string=lambda t: t and 'úplné zobrazení' in t):
+        sep = '&' if '?' in url else '?'
+        soup = get_soup(url + sep + 'xf=1')
 
-    # Získání kódu obce z URL
+    # Kód a název obce
     code = url.split('=')[-1]
+    headings = soup.find_all('h3')
+    name = headings[1].text.strip() if len(headings) > 1 else 'Neznámá obec'
 
-    # Získání názvu obce (druhý nadpis <h3>)
-    name_heading = soup.find_all('h3')
-    name = name_heading[1].text.strip() if len(name_heading) > 1 else "Neznámá obec"
-
-    # Základní statistiky (voliči, obálky, platné hlasy)
-    tds = soup.select('td')
+    # Základní statistiky
+    stats = soup.find('table')
+    tds = stats.find_all('td')
     registered = int(tds[3].text.replace('\xa0', '').replace(' ', ''))
     envelopes = int(tds[4].text.replace('\xa0', '').replace(' ', ''))
     valid = int(tds[7].text.replace('\xa0', '').replace(' ', ''))
 
-    # Hlasy pro jednotlivé strany
-    parties = [td.text.strip() for td in soup.select('td.overflow_name')]
-    vote_cells = soup.select('td.number.right')
-    votes = [int(td.text.replace('\xa0', '').replace(' ', '')) for td in vote_cells if td.text.strip().isdigit()]
-
-    # Složení dat do slovníku
     data = {
         'code': code,
         'location': name,
@@ -57,34 +58,42 @@ def get_obec_data(url):
         'valid': valid,
     }
 
-    for party, vote in zip(parties, votes):
-        data[party] = vote
+    # Hlasy stran
+    for table in soup.find_all('table'):
+        header = table.find('th')
+        if header and 'Strana' in header.text:
+            for row in table.find_all('tr')[1:]:
+                cells = row.find_all('td')
+                if len(cells) >= 3 and cells[1].text.strip():
+                    party = cells[1].text.strip()
+                    try:
+                        votes = int(cells[2].text.replace('\xa0', '').replace(' ', ''))
+                        data[party] = votes
+                    except ValueError:
+                        continue
+            break
 
     return data
 
 
 def main():
-    # Kontrola argumentů
-    if len(sys.argv) != 3:
-        print("Použití: python main.py <URL> <výstupní_soubor.csv>")
-        sys.exit(1)
+    # Pokud nebyly předány argumenty, použij výchozí URL a název souboru
+    if len(sys.argv) == 1:
+        input_url = URL_3
+        output_filename = DEFAULT_OUTPUT
+    elif len(sys.argv) == 3:
+        input_url = sys.argv[1]
+        output_filename = sys.argv[2]
+    else:
+        print(f"Použití: python {sys.argv[0]} [<URL> <výstupní_soubor.csv>]")
+        print(f"Nebyl zadán argument, bude použit výchozí: {DEFAULT_OUTPUT}")
+        input_url = URL_3
+        output_filename = DEFAULT_OUTPUT
 
-    input_url = sys.argv[1]
-    output_filename = sys.argv[2]
-
-    if "xjazyk=CZ" not in input_url:
-        print("Neplatný odkaz. Zkontroluj URL.")
-        sys.exit(1)
-
-    print("Stahuji data, chvíli strpení...")
-
-    # Získání odkazů na obce
+    print(f"Stahuji data z: {input_url}")
     links = get_obec_links(input_url)
-
-    # Získání dat z jednotlivých obcí
     all_data = [get_obec_data(link) for link in links]
 
-    # Převedení do DataFrame a export do .csv se středníkem pro Excel
     df = pd.DataFrame(all_data)
     df.to_csv(output_filename, index=False, encoding='utf-8-sig', sep=';')
 
